@@ -34,18 +34,14 @@ class UARTCommunication:
             data_without_crc = data[:-1]
             calculated_crc = self.calculate_crc(data_without_crc)
             
-            print(f"Received raw data: {data_without_crc}, received CRC: {received_crc}, calculated CRC: {calculated_crc}")
-            
             if received_crc == calculated_crc:
                 stat, loc_x, loc_z = struct.unpack(self.ESP32RecvData_format[:-1], data_without_crc)
                 print(f"Received: stat={stat}, loc_x={loc_x}, loc_z={loc_z}")
                 return stat, loc_x, loc_z
-            else:
-                print(f"CRC mismatch: received_crc={received_crc}, calculated_crc={calculated_crc}")
-                return None
-        else:
-            print("No data received or incomplete data")
-            return None
+            
+        
+        self.ser.reset_input_buffer()
+        return None
 
     def close(self):
         self.ser.close()
