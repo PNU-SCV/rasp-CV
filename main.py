@@ -11,23 +11,33 @@ import time
 import threading
 import math
 
-# 전역 변수 설정
-cmd = 0
-dest_x = 4.0
-dest_z = 1.5
+WITHOUT_MQTT = False
+
+cmd = 1
+dest_x = 3.0
+dest_z = 3.5
 angle = 0.0
 
-cell_size_cm = 80  # 셀 크기: 로봇의 대각선 길이와 동일 (70cm)
-tolerance_m = 0.2  # 허용 오차 (0.1m)
-temp_obstacle_duration = 5  # 임시 장애물 유지 시간 (초)
+cell_size_cm = 80  
+tolerance_m = 0.2  
+temp_obstacle_duration = 5  
 
-max_x = 5.1  # x 좌표의 최대 값 (미터 단위)
-max_z = 5.1  # z 좌표의 최대 값 (미터 단위)
+max_x = 7.3  
+max_z = 7.3  
 
 bitmap = None
 grid_size_x = None
 grid_size_z = None
-obstacles = []
+obstacles = [[0,0],[0,1],[0,2],[0,3],[0,6],[0,7],[0,8],
+             [1,0],[1,1],[1,2],[1,3],[1,6],[1,7],[1,8],
+             [2,3],[2,6],[2,7],[2,8],
+             [3,3],[3,6],[3,7],[3,8],
+             [4,6],[4,7],[4,8],
+             [5,6],[5,7],[5,8],
+             [6,3],
+             [7,3],[7,6],[7,7],[7,8],
+             [8,3],[8,6],[8,7],[8,8]]
+
 temp_obstacles = []
 
 camera_matrix = np.array([[829.0928006935812, 0.0, 320.51025314582233],
@@ -38,7 +48,9 @@ dist_coeffs = np.array([0.17667058749632775, -1.0737869272298604,
                         0.0021937583876734733, 0.0010397571854110412, 
                         1.40169723543808])
 
-# MQTT 콜백 함수 정의
+mqtt_stat = 0
+mqtt_loc_x, mqtt_loc_z = 0.0, 0.0
+
 def on_connect(client, userdata, flags, rc):
     print(f"Connected with result code {rc}")
     client.subscribe("/mqtt/scv1/forward")
@@ -65,18 +77,34 @@ def manage_temp_obstacles():
         if current_time - t < temp_obstacle_duration:
             new_temp_obstacles.append((grid_x, grid_z, t))
         else:
-            bitmap[grid_z, grid_x] = 1  # 임시 장애물 제거
+            bitmap[grid_z, grid_x] = 1  
     
     temp_obstacles = new_temp_obstacles
 
-def send_status_mqtt(client, status, loc_x, loc_z):
-    status_data = {
-        "status": status,
-        "loc_x": loc_x,
-        "loc_z": loc_z
-    }
-    client.publish("/mqtt/scv1/status", json.dumps(status_data))
-    print(f"Sent status: {status_data}")
+def send_status_mqtt(client, mqtt_stat_lock, mqtt_loc_lock):
+    global mqtt_stat, mqtt_loc_x, mqtt_loc_z
+    
+    temp_stat = 0
+    temp_loc_x = 0
+    temp_loc_z = 0
+    
+    while True:
+        with mqtt_stat_lock:
+            temp_stat = mqtt_stat
+            
+        with mqtt_loc_lock:
+            temp_loc_x, temp_loc_z = mqtt_loc_x, mqtt_loc_z
+        
+        status_data = {
+            "id":"scv1",
+            "status": temp_stat,
+            "loc_x": temp_loc_x,
+            "loc_z": temp_loc_z
+        }
+        client.publish("/mqtt/scv1/backward", json.dumps(status_data))
+        print(f"Sent status: {status_data}")
+        
+        time.sleep(1)
 
 def update_angle(picam2, aruco_detector, angle_lock):
     global angle
@@ -87,18 +115,12 @@ def update_angle(picam2, aruco_detector, angle_lock):
         if detected_angle is not None:
             with angle_lock:
                 angle = detected_angle
-            
-            #cv2.putText(img, f'Angle: {angle:.2f}', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        #cv2.imshow("Aruco Marker Detection", img)
         
         time.sleep(0.01)
 
-        #if cv2.waitKey(1) & 0xFF == ord('q'):
-        #    break
-
 def main(mqtt_client):
-    global cmd, dest_x, dest_z, bitmap, grid_size_x, grid_size_z, temp_obstacles
+    global cmd, dest_x, dest_z, bitmap, grid_size_x, grid_size_z, temp_obstacles, mqtt_stat, mqtt_loc_x, mqtt_loc_z
+    mqtt_stat, loc_x, loc_z = 0, 0, 0
     
     bitmap, grid_size_x, grid_size_z = create_grid(max_x, max_z, cell_size_cm, obstacles)
     print(bitmap)
@@ -115,24 +137,43 @@ def main(mqtt_client):
     path = []
     angle_lock = threading.Lock()
     state_lock = threading.Lock()
+    mqtt_stat_lock = threading.Lock()
+    mqtt_loc_lock = threading.Lock()
 
     angle_thread = threading.Thread(target=update_angle, args=(picam2, aruco_detector, angle_lock))
     angle_thread.start()
-
+    
+    mqtt_send_thread = threading.Thread(target=send_status_mqtt, args=(mqtt_client, mqtt_stat_lock, mqtt_loc_lock))
+    mqtt_send_thread.start()
+    
     try:
         while True:
+            with state_lock:
+                current_cmd = cmd
+            
+            if current_cmd == 0:
+                uart_comm.send_data(current_cmd, 0.0, 0.0, 0.0)
+        
+                time.sleep(0.1)
+                continue
+            
             recv_data = uart_comm.receive_data()
+            
             if not recv_data:
                 continue
             
-
             stat, loc_x, loc_z = recv_data
-            print(f"Received position: loc_x={loc_x}, loc_z={loc_z}")
-
-            send_status_mqtt(mqtt_client, stat, loc_x, loc_z)  # MQTT로 상태 전송
+            
+            with mqtt_loc_lock:
+                mqtt_loc_x, mqtt_loc_z = loc_x, loc_z
+            
+            if WITHOUT_MQTT == False:
+                with mqtt_stat_lock:
+                    mqtt_stat = 0
+            
             manage_temp_obstacles()
 
-            if stat != 0:  # 로봇이 비정상 상태일 때
+            if stat != 0:  
                 current_grid_x, current_grid_z = real_to_grid(loc_x, loc_z, cell_size_cm)
                 center_x, center_z = grid_to_real(current_grid_x, current_grid_z, cell_size_cm)
                 distance_to_center = math.sqrt((loc_x - center_x) ** 2 + (loc_z - center_z) ** 2)
@@ -141,10 +182,10 @@ def main(mqtt_client):
                     forward_x = current_grid_x + int(math.cos(math.radians(angle)))
                     forward_z = current_grid_z + int(math.sin(math.radians(angle)))
                     temp_obstacles.append((forward_x, forward_z, time.time()))
-                    bitmap[forward_z, forward_x] = 0  # 임시 장애물 추가
+                    bitmap[forward_z, forward_x] = 0  
                 else:
                     temp_obstacles.append((current_grid_x, current_grid_z, time.time()))
-                    bitmap[current_grid_z, current_grid_x] = 0  # 임시 장애물 추가
+                    bitmap[current_grid_z, current_grid_x] = 0
                     
                 continue
                 
@@ -175,6 +216,10 @@ def main(mqtt_client):
                 path.pop(0)
                 with state_lock:
                     cmd = 0 if not path else 1
+                    
+            if not path:
+                with mqtt_stat_lock:
+                    mqtt_stat = 5
 
             with angle_lock:
                 current_angle = angle
@@ -196,13 +241,17 @@ def main(mqtt_client):
         angle_thread.join()
 
 if __name__ == "__main__":
-    mqtt_client = mqtt.Client()
-    mqtt_client.on_connect = on_connect
-    mqtt_client.on_message = on_message
-    mqtt_client.connect("192.168.0.5", 1883, 60)
-    
-    mqtt_thread = threading.Thread(target=mqtt_client.loop_forever)
-    mqtt_thread.start()
+    mqtt_client = 1
+    if WITHOUT_MQTT == False:
+        mqtt_client = mqtt.Client()
+        mqtt_client.on_connect = on_connect
+        mqtt_client.on_message = on_message
+        mqtt_client.connect("192.168.0.5", 1883, 60)
+        
+        mqtt_thread = threading.Thread(target=mqtt_client.loop_forever)
+        mqtt_thread.start()
+    else:
+        mqtt_client = 0
 
     main(mqtt_client)
 
