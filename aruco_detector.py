@@ -12,11 +12,13 @@ class ArucoDetector:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         corners, ids, _ = cv2.aruco.detectMarkers(gray, self.aruco_dict, parameters=self.parameters)
         
-        if ids is not None and ids[0][0] == 0: 
-            rvec, tvec, _ = cv2.aruco.estimatePoseSingleMarkers(corners, 0.05, self.camera_matrix, self.dist_coeffs)
+        if ids is not None and ids[0][0] == 0:  
+            rvec, tvec, _ = cv2.aruco.estimatePoseSingleMarkers(corners, 0.15, self.camera_matrix, self.dist_coeffs)
             rmat, _ = cv2.Rodrigues(rvec[0])
-            marker_y_axis = rmat[:, 1]
-            angle = np.degrees(np.arctan2(marker_y_axis[0], marker_y_axis[2]))
+
+            angle = np.arctan2(rmat[1, 0], rmat[0, 0])
+            angle = np.degrees(angle)
+            
             return (angle + 360) % 360
         
         return None
