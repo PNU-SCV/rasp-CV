@@ -4,8 +4,8 @@ import struct
 class UARTCommunication:
     def __init__(self, port='/dev/serial0', baudrate=115200, timeout=0.1):
         self.ser = serial.Serial(port, baudrate, timeout=timeout)
-        self.ESP32SendData_format = '<BfffB'  # cmd, dest_x, dest_z, angle, crc
-        self.ESP32RecvData_format = '<BffB'   # stat, loc_x, loc_z, crc
+        self.ESP32SendData_format = '<BfffB'  
+        self.ESP32RecvData_format = '<BffB'   
 
     def calculate_crc(self, data):
         crc = 0x00
@@ -16,11 +16,11 @@ class UARTCommunication:
                     crc = (crc << 1) ^ 0x07
                 else:
                     crc <<= 1
-                crc &= 0xFF  # Ensure crc is 8-bit
+                crc &= 0xFF  
         return crc
 
     def send_data(self, cmd, dest_x, dest_z, angle):
-        data = struct.pack(self.ESP32SendData_format[:-1], cmd, dest_x, dest_z, angle)  # CRC 제외하고 패킹
+        data = struct.pack(self.ESP32SendData_format[:-1], cmd, dest_x, dest_z, angle)  
         crc = self.calculate_crc(data)
         data_with_crc = struct.pack(self.ESP32SendData_format, cmd, dest_x, dest_z, angle, crc)
         self.ser.write(data_with_crc)
@@ -28,7 +28,7 @@ class UARTCommunication:
     
     def receive_data(self):
         data_size = struct.calcsize(self.ESP32RecvData_format)
-        data = self.ser.read(data_size)  # 전체 크기를 읽음 (CRC 포함)
+        data = self.ser.read(data_size)  
         if len(data) == data_size:
             received_crc = data[-1]
             data_without_crc = data[:-1]
@@ -38,6 +38,8 @@ class UARTCommunication:
                 stat, loc_x, loc_z = struct.unpack(self.ESP32RecvData_format[:-1], data_without_crc)
                 print(f"Received: stat={stat}, loc_x={loc_x}, loc_z={loc_z}")
                 return stat, loc_x, loc_z
+            else:
+                print("CRC not matched")
             
         
         self.ser.reset_input_buffer()
